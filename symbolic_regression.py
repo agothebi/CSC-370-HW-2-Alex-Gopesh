@@ -55,34 +55,40 @@ class EquationTree:
         return f"({self.left} {self.value} {self.right})"
     
 
-def make_random_leaf(num_vars: int) -> EquationTree:
+def make_random_leaf(num_vars: int, real_constants: bool) -> EquationTree:
     """Returns either a variable or a numerical constnt equal probability."""
     if random.random() < 0.5:
         return EquationTree(f"x{random.randint(1, num_vars)}")
-    val = random.randint(-5, 5)
+    val = random.randint(-5, 5) if not real_constants else round(random.uniform(-5, 5), 2)
     return EquationTree(val)
 
 
-def make_random_tree(max_depth: int, num_vars: int, is_root: bool = False) -> EquationTree:
+def make_random_tree(max_depth: int, num_vars: int, real_constants: bool, is_root: bool = False) -> EquationTree:
     """Recursively builds an expression tree."""
     if max_depth == 0 or (not is_root and random.random() < 0.3):
-        return make_random_leaf(num_vars)
+        return make_random_leaf(num_vars, real_constants)
 
     operator = random.choice(['+', '-' , '*', '/'])
-    left = make_random_tree(max_depth - 1, num_vars, is_root=False)
-    right = make_random_tree(max_depth - 1, num_vars, is_root=False)
+    left = make_random_tree(max_depth - 1, num_vars, real_constants, is_root=False)
+    right = make_random_tree(max_depth - 1, num_vars, real_constants, is_root=False)
 
     return EquationTree(operator, left, right)
 
 
-def initialize_population(population_size: int, num_vars: int, min_depth: int = 2, max_depth: int = 5) -> list[EquationTree]:
+def initialize_population(
+    population_size: int,
+    num_vars: int,
+    min_depth: int = 2,
+    max_depth: int = 5,
+    real_constants : bool = False
+    ) -> list[EquationTree]:
     """Generates a collection of randomly generated unique trees of varying heights & contents."""
     population = []
     seen = set()
 
     while len(population) < population_size:
         depth_budget = random.randint(min_depth, max_depth)
-        tree = make_random_tree(depth_budget, num_vars, is_root=True)
+        tree = make_random_tree(depth_budget, num_vars, real_constants, is_root=True)
 
         if tree in seen:
             continue
