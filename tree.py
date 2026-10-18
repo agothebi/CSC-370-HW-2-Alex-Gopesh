@@ -86,12 +86,11 @@ def full(depth, cfg, rng):
 def leaf(cfg, rng):
     if rng.random() < 0.5:
         return Node(rng.choice(cfg.variables))
-    return Node(cfg.constant(rng))
+    return Node(rng.randint(-5, 5))
 
 
 def initial_population(cfg, rng):
-    """Ramped half-and-half (Koza): depths ramped across the population,
-    alternating grow and full, for a diverse generation 0."""
+    """Alternate grow and full trees at different depths."""
     depths = range(cfg.init_min_depth, cfg.init_max_depth + 1)
     builders = [grow, full]
     return [

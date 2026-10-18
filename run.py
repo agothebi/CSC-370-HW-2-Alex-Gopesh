@@ -111,8 +111,8 @@ def summarize(paths):
         d = json.loads(path.read_text())
         cfg, runs = d["config"], d["runs"]
         best = runs[d["best_run"]]
-        initial, final = [np.mean([r["history"][i]["unique"] / cfg["population"]
-                                  for r in runs]) for i in (0, -1)]
+        initial = np.mean([r["history"][0]["unique"] for r in runs]) / cfg["population"]
+        final = np.mean([r["history"][-1]["unique"] for r in runs]) / cfg["population"]
         lines.append(
             f"| {Path(cfg['dataset']).stem} | {cfg['population']} | {cfg['size_penalty']:g} "
             f"| {best['test_error']:.6g} | {np.median([r['test_error'] for r in runs]):.6g} "

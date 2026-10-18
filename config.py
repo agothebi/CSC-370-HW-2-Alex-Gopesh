@@ -42,10 +42,6 @@ class Config:
         if self.metric not in ("least_squares", "relative"):
             raise ValueError("unknown error metric")
 
-    def constant(self, rng):
-        return rng.randint(-5, 5)
-
-
 PRESETS = {
     "dataset1.csv": Config(),
     "dataset2.csv": Config(

@@ -65,7 +65,7 @@ def evolve(train, cfg, seed):
         winner = min(range(len(pop)), key=lambda i: keys[i])
         if best is None or keys[winner] < best_key:
             best, best_key = pop[winner], keys[winner]
-        history.append(stats(gen, pop, errors, keys, winner))
+        history.append(stats(gen, pop, errors, keys[winner], winner))
         if gen + 1 < cfg.generations:
             pop = next_population(pop, keys, cfg, rng)
 
@@ -78,13 +78,13 @@ def penalized(t, err, cfg):
     return err * (1 + cfg.size_penalty * t.size)
 
 
-def stats(gen, pop, errors, keys, winner):
+def stats(gen, pop, errors, best_fitness, winner):
     sizes = [t.size for t in pop]
     finite = [e for e in errors if np.isfinite(e)]
     return {
         "gen": gen,
         "best": errors[winner],
-        "best_fitness": keys[winner],
+        "best_fitness": best_fitness,
         "median": float(np.median(finite)) if finite else None,
         "mean_size": float(np.mean(sizes)),
         "max_size": max(sizes),
