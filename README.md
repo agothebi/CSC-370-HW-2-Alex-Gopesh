@@ -11,9 +11,8 @@ Dataset3 is optional and we did not use it.
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-python -B -m unittest -v
-python run.py dataset1.csv
-python run.py dataset2.csv
+python symbolic_regression.py dataset1.csv
+python symbolic_regression.py dataset2.csv
 ```
 
 The defaults are 10 runs, population 250, and 50 generations. Each run uses
@@ -23,24 +22,25 @@ seeds are 370 through 379.
 For the population and size penalty comparisons:
 
 ```sh
-python run.py dataset1.csv --pop 50
-python run.py dataset1.csv --penalty 0
-python run.py dataset2.csv --pop 50
-python run.py dataset2.csv --penalty 0
+python symbolic_regression.py dataset1.csv --pop 50
+python symbolic_regression.py dataset1.csv --penalty 0
+python symbolic_regression.py dataset2.csv --pop 50
+python symbolic_regression.py dataset2.csv --penalty 0
 ```
 
 Results go in `results/` as JSON and PNG files. Running the same command
 again overwrites its files. Use `--plot` to plot an existing JSON:
 
 ```sh
-python run.py dataset1.csv --plot
+python symbolic_regression.py dataset1.csv --plot
 ```
 
 ## Code
 
-`tree.py` builds and evaluates trees. `gp.py` handles selection, crossover,
-mutation, and the generation loop. `fitness.py` scores trees, `data.py` loads
-the CSVs, and `config.py` has the settings. `run.py` runs the experiments.
+Everything is in `symbolic_regression.py`: the expression tree, data loading,
+fitness, genetic operators, and experiment runner. It combines Gopesh's
+left/right tree structure with the training-only scaling and experiment code.
+`symreg.ipynb` runs the same file for each dataset.
 
 Trees use +, -, *, protected division, variables, and integers from -5 to 5.
 Division returns 1 when the divisor is smaller than 1e-12 in absolute value.
@@ -55,9 +55,7 @@ squared relative error, with denominator `max(abs(y), 0.005)`. The floor is
 half the last recorded decimal unit. All rows are kept, including zero targets
 and zero distances. Test predictions use the same fitted constants.
 
-`symbolic_regression.py` and `symreg.ipynb` are Gopesh's implementation and
-notebook. They use a separate GP loop and scoring method. The saved results
-in [RESULTS.md](RESULTS.md) come from `run.py`.
+See [RESULTS.md](RESULTS.md) for the saved experiment results.
 
 The expression trees and operators follow the assignment's
 [Koza tutorial](https://www.genetic-programming.com/gpquadraticexample.html).

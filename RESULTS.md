@@ -76,5 +76,5 @@ Versions can affect numerical details. Runs were timed concurrently, so the
 timings are not a controlled speed comparison.
 
 ```sh
-python -c 'from pathlib import Path; import run; print(run.summarize(Path("results").glob("*.json")))'
+python -c 'from pathlib import Path; import symbolic_regression as sr; print(sr.summarize(Path("results").glob("*.json")))'
 ```

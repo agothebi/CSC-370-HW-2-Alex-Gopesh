@@ -1,224 +1,469 @@
-from dataclasses import dataclass
-from typing import Any, Optional
-import numpy as np
-import random
+"""Symbolic regression for CSC 370 HW2. Alex Shields and Gopesh Baheti."""
 
-EARLY_STOP_THRESHOLD = 1e-4
+import argparse
+from dataclasses import dataclass
+import dataclasses
+import hashlib
+import json
+from pathlib import Path
+import platform
+import random
+import time
+
+import numpy as np
+
+
+@dataclass(frozen=True)
+class Config:
+    dataset: str = "dataset1.csv"
+    variables: tuple = ("x",)
+    metric: str = "least_squares"
+
+    population: int = 250
+    generations: int = 50
+    tournament_k: int = 7
+    elite_frac: float = 0.08  # reproduction: copied unchanged
+    crossover_frac: float = 0.90  # the remaining 2% is mutation
+
+    init_min_depth: int = 2
+    init_max_depth: int = 6
+    max_depth: int = 8
+    # Fitness = error * (1 + penalty * number of tree nodes).
+    size_penalty: float = 0.01
+    n_test: int = 5000
+
+    def __post_init__(self):
+        if self.population < self.tournament_k or self.tournament_k < 1:
+            raise ValueError("population must be at least tournament_k, which must be positive")
+        if self.generations < 1:
+            raise ValueError("generations must be positive")
+        if not 0 <= self.elite_frac <= 1 or not 0 <= self.crossover_frac <= 1:
+            raise ValueError("reproduction fractions must be between 0 and 1")
+        if self.elite_frac + self.crossover_frac > 1:
+            raise ValueError("elite and crossover fractions must sum to at most 1")
+        n_elite = round(self.elite_frac * self.population)
+        n_cross = round(self.crossover_frac * self.population)
+        if n_elite + n_cross > self.population:
+            raise ValueError("rounded reproduction counts exceed population")
+        if not 0 <= self.size_penalty < float("inf"):
+            raise ValueError("size penalty must be finite and nonnegative")
+        if not 0 <= self.init_min_depth <= self.init_max_depth <= self.max_depth:
+            raise ValueError("initial depths must be within the depth limit")
+        if self.metric not in ("least_squares", "relative"):
+            raise ValueError("unknown error metric")
+
+
+PRESETS = {
+    "dataset1.csv": Config(),
+    "dataset2.csv": Config(
+        dataset="dataset2.csv",
+        variables=("x1", "x2", "x3"),
+        metric="relative",
+    ),
+}
+
+
+def load(path):
+    """Read a CSV whose last column is f(...). Returns (env, y).
+
+    env maps each variable name from the header to its column.
+    """
+    with open(path) as f:
+        names = f.readline().strip().split(",")
+    table = np.genfromtxt(path, delimiter=",", skip_header=1)
+    # The target's own header contains commas ("f(x1,x2,x3)"), so trust the
+    # column count rather than the header's field count.
+    env = {name: table[:, i] for i, name in enumerate(names[: table.shape[1] - 1])}
+    return env, table[:, -1]
+
+
+def split(env, y, n_test, seed):
+    """Hold out n_test points. The test set is never seen during evolution."""
+    if not 0 < n_test < len(y):
+        raise ValueError("test size must leave nonempty training and test sets")
+    order = np.random.default_rng(seed).permutation(len(y))
+    test, train = order[:n_test], order[n_test:]
+    def take(idx):
+        return {k: v[idx] for k, v in env.items()}, y[idx]
+
+    return take(train), take(test)
+
+
+def protected_divide(a, b):
+    """Koza's protected division: 1 where the divisor is ~zero."""
+    zero = np.abs(b) < 1e-12
+    return np.where(zero, 1.0, a / np.where(zero, 1.0, b))
+
+
+OPS = {"+": np.add, "-": np.subtract, "*": np.multiply, "/": protected_divide}
 
 
 @dataclass(frozen=True)
 class ExpressionTree:
-    value: Any
-    left: Optional['ExpressionTree'] = None
-    right: Optional['ExpressionTree'] = None
+    value: object
+    left: "ExpressionTree | None" = None
+    right: "ExpressionTree | None" = None
 
     @property
-    def is_leaf(self) -> bool:
+    def is_leaf(self):
         return self.left is None and self.right is None
 
-    def evaluate(self, X: np.ndarray) -> np.ndarray:
-        # if it is a variable, return the associated column from the dataset
-        if isinstance(self.value, str) and self.value.startswith('x'):
-            col = int(self.value[1:]) - 1
-            return X[:, col]
+    @property
+    def children(self):
+        return () if self.is_leaf else (self.left, self.right)
 
-        # for constant, return a np array of constant of same size as dataset
+    def evaluate(self, env):
+        n = len(next(iter(env.values())))
+        with np.errstate(all="ignore"):
+            return np.broadcast_to(self._eval(env), n)
+
+    def _eval(self, env):
         if self.is_leaf:
-            return np.full(len(X), float(self.value))
+            return env[self.value] if self.value in env else float(self.value)
+        return OPS[self.value](self.left._eval(env), self.right._eval(env))
 
-        # evaluate left and right children, then apply thhe operator to the final results
-        left_val = self.left.evaluate(X)
-        right_val = self.right.evaluate(X)
-
-        if self.value == '+':
-            return left_val + right_val
-        if self.value == '-':
-            return left_val - right_val
-        if self.value == '*':
-            return left_val * right_val
-        if self.value == '/':
-            safe_divisor = np.where(right_val == 0, 1.0, right_val)
-            return np.where(right_val == 0, 1.0, left_val / safe_divisor)
-        else:
-            raise ValueError(f'The operator {self.value} is not valid!')
-
-    def size(self) -> int:
+    @property
+    def size(self):
         if self.is_leaf:
             return 1
-        return 1 + self.left.size() + self.right.size()
+        return 1 + self.left.size + self.right.size
 
-    def depth(self) -> int:
+    @property
+    def depth(self):
         if self.is_leaf:
             return 0
-        return 1 + max(self.left.depth(), self.right.depth())
+        return 1 + max(self.left.depth, self.right.depth)
 
-    def get_subtree(self, index: int) -> 'ExpressionTree':
-        """Returns the subtree at the given index."""
-        if index == 0:
-            return self
+    def paths(self, prefix=()):
+        yield prefix
+        for i, child in enumerate(self.children):
+            yield from child.paths(prefix + (i,))
 
-        left_tree_size = self.left.size()
-        # check which side of tree the index falls in
-        if index <= left_tree_size:
-            return self.left.get_subtree(index - 1)
-        return self.right.get_subtree(index - 1 - left_tree_size)
+    def at(self, path):
+        node = self
+        for i in path:
+            node = node.children[i]
+        return node
 
-    def replace_subtree(self, index: int, replacement: 'ExpressionTree') -> 'ExpressionTree':
-        """ Finds the subtree at given index and replaces it with the given subtree."""
-        if index == 0:
+    def replace(self, path, replacement):
+        if not path:
             return replacement
+        children = list(self.children)
+        i = path[0]
+        children[i] = children[i].replace(path[1:], replacement)
+        return ExpressionTree(self.value, *children)
 
-        left_size = self.left.size()
-        if index <= left_size:
-            new_left = self.left.replace_subtree(index - 1, replacement)
-            return ExpressionTree(self.value, new_left, self.right)
-        else:
-            new_right = self.right.replace_subtree(index - 1 - left_size, replacement)
-            return ExpressionTree(self.value, self.left, new_right)
-
-    def __str__(self) -> str:
+    def __str__(self):
         if self.is_leaf:
             return str(self.value)
         return f"({self.left} {self.value} {self.right})"
-    
-    def __repr__(self) -> str:
-        return self.__str__()
-    
-
-def make_random_leaf(num_vars: int, real_constants: bool) -> ExpressionTree:
-    """Returns either a variable or a numerical constnt with equal probability."""
-    if random.random() < 0.5:
-        return ExpressionTree(f"x{random.randint(1, num_vars)}")
-    val = random.randint(-5, 5) if not real_constants else round(random.uniform(-5, 5), 2)
-    return ExpressionTree(val)
 
 
-def make_random_tree(max_depth: int, num_vars: int, real_constants: bool, is_root: bool = False) -> ExpressionTree:
-    """Recursively builds an expression tree."""
-    if max_depth == 0 or (not is_root and random.random() < 0.3):
-        return make_random_leaf(num_vars, real_constants)
-
-    operator = random.choice(['+', '-' , '*', '/'])
-    left = make_random_tree(max_depth - 1, num_vars, real_constants, is_root=False)
-    right = make_random_tree(max_depth - 1, num_vars, real_constants, is_root=False)
-
-    return ExpressionTree(operator, left, right)
+def grow(depth, cfg, rng):
+    """Ragged tree: branches may stop early."""
+    if depth == 0 or rng.random() < 0.3:
+        return leaf(cfg, rng)
+    return ExpressionTree(rng.choice(list(OPS)), *(grow(depth - 1, cfg, rng) for _ in range(2)))
 
 
-def initialize_population(
-    population_size: int,
-    num_vars: int,
-    min_depth: int = 1,
-    max_depth: int = 5,
-    real_constants : bool = False
-    ) -> list[ExpressionTree]:
-    """Generates a collection of randomly generated unique trees of varying heights & contents."""
-    population = []
-    seen = set()
-
-    while len(population) < population_size:
-        depth_budget = random.randint(min_depth, max_depth)
-        tree = make_random_tree(depth_budget, num_vars, real_constants, is_root=True)
-
-        if tree in seen:
-            continue
-
-        seen.add(tree)
-        population.append(tree)
-
-    return population
-
-def get_fitness(expression: ExpressionTree, x: np.ndarray, y: np.ndarray) -> float:
-    """Returns normalized mean squared error between predicted and true values."""
-    y_pred = expression.evaluate(x)
-    
-    if not np.isfinite(y_pred).all():
-        return float('inf')
-
-    mse = np.mean((y_pred - y) ** 2)
-    normalized_error = mse / (np.var(y) + 1e-9)
-
-    return normalized_error
-
-def mutate(expression: ExpressionTree, num_vars: int, real_constants: bool, max_depth: int = 8) -> ExpressionTree:
-    # Pick a random index in the expression tree
-    index = random.randrange(expression.size())
-    # generate a small random replacement subtree
-    subtree_depth = random.randint(1, 2)
-    replacement = make_random_tree(subtree_depth, num_vars, real_constants)
-    new_expression = expression.replace_subtree(index, replacement)
-
-    return expression if new_expression.depth() > max_depth else new_expression
-
-def crossover(parent1: ExpressionTree, parent2: ExpressionTree, max_depth: int = 8) -> ExpressionTree:
-    index1 = random.randrange(parent1.size())
-    index2 = random.randrange(parent2.size())
-
-    donor = parent2.get_subtree(index2)
-    child = parent1.replace_subtree(index1, donor)
-
-    return parent1 if child.depth() > max_depth else child
+def full(depth, cfg, rng):
+    """Bushy tree: every branch runs to depth."""
+    if depth == 0:
+        return leaf(cfg, rng)
+    return ExpressionTree(rng.choice(list(OPS)), *(full(depth - 1, cfg, rng) for _ in range(2)))
 
 
-def select_parent(population: list[ExpressionTree], scores: list[float], k: int = 4) -> ExpressionTree:
-    """Returns the tree with lowest error among k random trees to add diversity to next generation"""
-    chosen_species = random.sample(range(len(population)), k)
-    best_species = min(chosen_species, key=lambda i: scores[i])
-    return population[best_species]
+def leaf(cfg, rng):
+    if rng.random() < 0.5:
+        return ExpressionTree(rng.choice(cfg.variables))
+    return ExpressionTree(rng.randint(-5, 5))
 
 
-def run_gp(x_train: np.ndarray, y_train: np.ndarray, num_vars: int, real_constants: bool, population_size=1000, generations=40):
-    population = initialize_population(population_size, num_vars)
-    
-    for gen in range(generations):
-        scores = [get_fitness(species, x_train, y_train) for species in population]
-        
-        # Sort the population by fitness
-        ranked = [tree for _, tree in sorted(zip(scores, population), key=lambda x: x[0])]
-
-        best_tree = ranked[0]
-        best_score = min(scores)
-
-        print(f"Generation {gen}: Best error = {best_score:.4f} with {best_tree}")
-        
-        # Early stop if we found an essentially perfect formula
-        if best_score < EARLY_STOP_THRESHOLD:
-            break
-
-        # generate new population
-        next_population = [ranked[0], ranked[1]] # take the top 2 of this population
-        # fill the reamining population with crossover (0.8) and mutation (0.2)
-        while len(next_population) < population_size:
-            p1 = select_parent(population, scores)
-            if random.random() < 0.8:
-                p2 = select_parent(population, scores)
-                child = crossover(p1, p2)
-            else:
-                child = mutate(p1, num_vars, real_constants)
-                
-            next_population.append(child)
-
-        population = next_population
-
-    return best_tree
+def initial_population(cfg, rng):
+    """Alternate grow and full trees at different depths."""
+    depths = range(cfg.init_min_depth, cfg.init_max_depth + 1)
+    builders = [grow, full]
+    return [
+        builders[i % 2](depths[i % len(depths)], cfg, rng)
+        for i in range(cfg.population)
+    ]
 
 
-if __name__ == '__main__':
-    random.seed(212)
+RESOLUTION = 0.005
 
-    # Parent 1: ((x1 + 3) * x2)
-    p1 = ExpressionTree('*', ExpressionTree('+', ExpressionTree('x1'), ExpressionTree(3)), ExpressionTree('x2'))
-    # Parent 2: (4 - (x1 / 2))
-    p2 = ExpressionTree('-', ExpressionTree(4), ExpressionTree('/', ExpressionTree('x1'), ExpressionTree(2)))
 
-    print("Parent 1:", p1)
-    print("Parent 2:", p2)
+def fit_scale(predictions, targets, metric):
+    """Fit a + b*predictions using training data only."""
+    if not np.all(np.isfinite(predictions)):
+        return np.nan, np.nan
+    scale = float(np.max(np.abs(predictions)))
+    if scale == 0:
+        return (float(targets.mean()), 0.0) if metric == "least_squares" else (0.0, 0.0)
+    # Normalizing avoids squaring enormous raw tree outputs during fitting.
+    q = predictions / scale
+    with np.errstate(all="ignore"):
+        if metric == "least_squares":
+            centered = q - q.mean()
+            variance = np.mean(centered * centered)
+            if variance == 0:
+                return float(targets.mean()), 0.0
+            b = np.mean(centered * (targets - targets.mean())) / variance
+            a = targets.mean() - b * q.mean()
+        elif metric == "relative":
+            denominator = np.maximum(np.abs(targets), RESOLUTION)
+            weighted = q / denominator
+            weight_sum = np.mean(weighted * weighted)
+            if weight_sum == 0:
+                return 0.0, 0.0
+            b = np.mean(weighted * (targets / denominator)) / weight_sum
+            a = 0.0
+        else:
+            raise ValueError(f"unknown metric: {metric}")
+        return float(a), float(b / scale)
 
-    # Test crossover
-    child = crossover(p1, p2)
-    print("Child after crossover: ", child)
-    print("Parent 1 unchanged:    ", p1)
 
-    # Test mutation
-    mutated = mutate(p1, num_vars=2, real_constants=False)
-    print("Mutated Parent 1:      ", mutated)
+def loss(predictions, targets, metric, normalizer=1.0):
+    """Score predictions without fitting anything to the supplied targets."""
+    if not np.all(np.isfinite(predictions)):
+        return np.inf
+    with np.errstate(all="ignore"):
+        residual = predictions - targets
+        if metric == "least_squares":
+            result = np.mean(residual * residual) / normalizer
+        elif metric == "relative":
+            residual = residual / np.maximum(np.abs(targets), RESOLUTION)
+            result = np.mean(residual * residual)
+        else:
+            raise ValueError(f"unknown metric: {metric}")
+    return float(result) if np.isfinite(result) else np.inf
+
+
+def score(t, env, y, cfg, normalizer=None):
+    """Fit and score one training candidate; return (error, a, b)."""
+    if t.depth > cfg.max_depth:
+        return np.inf, 0.0, 0.0
+    if normalizer is None:
+        normalizer = max(float(y.var()), 1e-30)
+    raw = t.evaluate(env)
+    a, b = fit_scale(raw, y, cfg.metric)
+    with np.errstate(all="ignore"):
+        predictions = a + b * raw
+    return loss(predictions, y, cfg.metric, normalizer), a, b
+
+
+def tournament(pop, keys, k, rng):
+    """Pick the best of k distinct randomly sampled individuals."""
+    best = min(rng.sample(range(len(pop)), k), key=lambda i: keys[i])
+    return pop[best]
+
+
+def pick_path(t, rng):
+    """Choose an internal node 90% of the time, otherwise a leaf."""
+    paths = list(t.paths())
+    internal = [p for p in paths if t.at(p).children]
+    leaves = [p for p in paths if not t.at(p).children]
+    return rng.choice(internal if internal and rng.random() < 0.9 else leaves)
+
+
+def crossover(a, b, cfg, rng):
+    """Replace a subtree in the first parent with one from the second."""
+    child = a.replace(pick_path(a, rng), b.at(pick_path(b, rng)))
+    return child if child.depth <= cfg.max_depth else a
+
+
+def mutate(t, cfg, rng):
+    """Replace a random subtree with a newly grown one."""
+    child = t.replace(pick_path(t, rng), grow(cfg.init_max_depth, cfg, rng))
+    return child if child.depth <= cfg.max_depth else t
+
+
+def next_population(pop, keys, cfg, rng):
+    """Copy elites, then create the configured number of crossover children."""
+    order = sorted(range(len(pop)), key=lambda i: keys[i])
+    n_elite = round(cfg.elite_frac * cfg.population)
+    n_cross = round(cfg.crossover_frac * cfg.population)
+    nxt = [pop[i] for i in order[:n_elite]]
+    for _ in range(n_cross):
+        nxt.append(crossover(
+            tournament(pop, keys, cfg.tournament_k, rng),
+            tournament(pop, keys, cfg.tournament_k, rng), cfg, rng,
+        ))
+    while len(nxt) < cfg.population:
+        nxt.append(mutate(tournament(pop, keys, cfg.tournament_k, rng), cfg, rng))
+    return nxt
+
+
+def evolve(train, cfg, seed):
+    """Evaluate a fixed number of populations on all training rows."""
+    env, y = train
+    rng = random.Random(seed)
+    pop = initial_population(cfg, rng)
+    normalizer = max(float(y.var()), 1e-30)
+    best, best_key = None, np.inf
+    history = []
+
+    for gen in range(cfg.generations):
+        errors = [score(t, env, y, cfg, normalizer)[0] for t in pop]
+        keys = [penalized(t, e, cfg) for t, e in zip(pop, errors)]
+        winner = min(range(len(pop)), key=lambda i: keys[i])
+        if best is None or keys[winner] < best_key:
+            best, best_key = pop[winner], keys[winner]
+        history.append(stats(gen, pop, errors, keys[winner], winner))
+        if gen + 1 < cfg.generations:
+            pop = next_population(pop, keys, cfg, rng)
+
+    if not np.isfinite(best_key):
+        raise ValueError("no individual had finite training fitness")
+    return best, history
+
+
+def penalized(t, err, cfg):
+    return err * (1 + cfg.size_penalty * t.size)
+
+
+def stats(gen, pop, errors, best_fitness, winner):
+    sizes = [t.size for t in pop]
+    finite = [e for e in errors if np.isfinite(e)]
+    return {
+        "gen": gen,
+        "best": errors[winner],
+        "best_fitness": best_fitness,
+        "median": float(np.median(finite)) if finite else None,
+        "mean_size": float(np.mean(sizes)),
+        "max_size": max(sizes),
+        "unique": len({str(t) for t in pop}),
+    }
+
+
+def result_name(cfg, seed, runs):
+    return (f"{Path(cfg.dataset).stem}_pop{cfg.population}_gens{cfg.generations}"
+            f"_pen{cfg.size_penalty:g}_seed{seed}_runs{runs}")
+
+
+def evaluate(t, train, test, cfg):
+    """Fit on train once, then use those constants for both sets."""
+    normalizer = max(float(train[1].var()), 1e-30)
+    _, a, b = score(t, *train, cfg, normalizer)
+    train_predictions = a + b * t.evaluate(train[0])
+    test_predictions = a + b * t.evaluate(test[0])
+    return {
+        "tree": str(t),
+        "a": a,
+        "b": b,
+        "expression": f"{a:.6g} + {b:.6g} * {t}",
+        "train_error": loss(train_predictions, train[1], cfg.metric, normalizer),
+        "test_error": loss(test_predictions, test[1], cfg.metric, normalizer),
+        "test_rmse": float(np.sqrt(np.mean((test[1] - test_predictions) ** 2))),
+        "size": t.size,
+    }
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("dataset", choices=list(PRESETS))
+    p.add_argument("--runs", type=int, default=10)
+    p.add_argument("--pop", type=int)
+    p.add_argument("--gens", type=int)
+    p.add_argument("--penalty", type=float)
+    p.add_argument("--seed", type=int, default=370)
+    p.add_argument("--plot", action="store_true", help="replot the matching saved experiment")
+    args = p.parse_args()
+    if args.runs < 1 or args.seed < 0:
+        p.error("runs must be positive and seed must be nonnegative")
+    overrides = {key: value for key, value in {
+        "population": args.pop, "generations": args.gens, "size_penalty": args.penalty,
+    }.items() if value is not None}
+    try:
+        cfg = dataclasses.replace(PRESETS[args.dataset], **overrides)
+    except ValueError as exc:
+        p.error(str(exc))
+    path = Path("results") / (result_name(cfg, args.seed, args.runs) + ".json")
+    if args.plot:
+        plot(path)
+        return
+
+    env, y = load(args.dataset)
+    train, test = split(env, y, cfg.n_test, args.seed)
+    print(f"{args.dataset}: {args.runs} runs, population {cfg.population}, "
+          f"{cfg.generations} evaluated generations", flush=True)
+    runs = []
+    for i in range(args.runs):
+        seed = args.seed + i
+        started = time.perf_counter()
+        t, history = evolve(train, cfg, seed)
+        r = evaluate(t, train, test, cfg)
+        r.update(seed=seed, history=history, generations=len(history),
+                 elapsed_seconds=time.perf_counter() - started)
+        runs.append(r)
+        print(f"  seed {seed}: test={r['test_error']:.6g}, size={t.size}, "
+              f"{r['elapsed_seconds']:.1f}s  {r['expression']}", flush=True)
+    best_index = min(range(len(runs)), key=lambda i:
+                     runs[i]["test_error"] * (1 + cfg.size_penalty * runs[i]["size"]))
+    result = {
+        "config": dataclasses.asdict(cfg),
+        "split_seed": args.seed,
+        "n_train": len(train[1]),
+        "n_test": len(test[1]),
+        "normalizer": max(float(train[1].var()), 1e-30),
+        "zero_distance_rows": int(np.sum(env["x3"] == 0)) if "x3" in env else 0,
+        "dataset_sha256": hashlib.sha256(Path(args.dataset).read_bytes()).hexdigest(),
+        "python_version": platform.python_version(),
+        "numpy_version": np.__version__,
+        "best_run": best_index,
+        "runs": runs,
+    }
+    # Validate before replacing an existing result file.
+    saved = json.dumps(result, indent=1, allow_nan=False)
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(saved + "\n")
+    print(f"best: {runs[best_index]['expression']}\nwrote {path}", flush=True)
+    plot(path)
+
+
+def summarize(paths):
+    """Make the results table directly from saved experiments."""
+    lines = [
+        "| Dataset | Population | Penalty | Selected test error | Median test error | Median nodes | Mean diversity, initial → final |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for path in sorted(map(Path, paths)):
+        d = json.loads(path.read_text())
+        cfg, runs = d["config"], d["runs"]
+        best = runs[d["best_run"]]
+        initial = np.mean([r["history"][0]["unique"] for r in runs]) / cfg["population"]
+        final = np.mean([r["history"][-1]["unique"] for r in runs]) / cfg["population"]
+        lines.append(
+            f"| {Path(cfg['dataset']).stem} | {cfg['population']} | {cfg['size_penalty']:g} "
+            f"| {best['test_error']:.6g} | {np.median([r['test_error'] for r in runs]):.6g} "
+            f"| {np.median([r['size'] for r in runs]):g} | {initial:.1%} → {final:.1%} |"
+        )
+    return "\n".join(lines)
+
+
+def plot(path):
+    """Plot training convergence, tree size, and expression diversity."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    path = Path(path)
+    d = json.loads(path.read_text())
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4))
+    for key, label, ax in zip(
+        ["best", "mean_size", "unique"],
+        ["training error of generation winner", "mean tree size", "distinct expressions"], axes,
+    ):
+        for r in d["runs"]:
+            ax.plot([h["gen"] for h in r["history"]], [h[key] for h in r["history"]], lw=1)
+        ax.set(xlabel="generation (0 is initial)", ylabel=label, title=label)
+        ax.grid(alpha=0.3)
+    axes[0].set_yscale("log")
+    fig.suptitle(f"{path.stem}: {len(d['runs'])} runs")
+    fig.tight_layout()
+    fig.savefig(path.with_suffix(".png"), dpi=130)
+    plt.close(fig)
+    print(f"wrote {path.with_suffix('.png')}", flush=True)
+
+
+if __name__ == "__main__":
+    main()
