@@ -101,4 +101,14 @@ def initialize_population(
 
     return population
 
-print(initialize_population(3, 2))
+def get_fitness(equation: EquationTree, x: np.ndarray, y: np.ndarray) -> float:
+    """Returns normalized mean squared error between predicted and true values."""
+    with np.errstate(all='ignore'):
+        y_pred = equation.evaluate(x)
+
+    # Normalized Mean Squared Error
+    y_variance = np.var(y)
+    mse = np.mean((y_pred - y) ** 2)
+    normalized_error = mse / y_variance if y_variance > 1e-9 else mse
+
+    return normalized_error
