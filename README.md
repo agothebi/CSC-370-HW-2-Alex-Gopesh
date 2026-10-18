@@ -28,8 +28,18 @@ python symbolic_regression.py dataset2.csv --pop 50
 python symbolic_regression.py dataset2.csv --penalty 0
 ```
 
-Results go in `results/` as JSON and PNG files. Running the same command
-again overwrites its files. Use `--plot` to plot an existing JSON:
+Results go in four CSV files in `results/`:
+
+- `experiments.csv`: settings and dataset metadata.
+- `runs.csv`: models, errors, constants, and timings for each run.
+- `generations.csv`: training error, tree size, and diversity by generation.
+- `summary.csv`: one row per experiment for comparing settings.
+
+Use `experiment` to join the tables, plus `run_index` for individual runs.
+Run and generation indices start at zero. The files include all six experiments
+(60 runs and 3,000 generation records). Running the same settings replaces
+that experiment's rows and keeps the others. PNG plots are saved locally.
+Use `--plot` to plot the saved CSV data:
 
 ```sh
 python symbolic_regression.py dataset1.csv --plot

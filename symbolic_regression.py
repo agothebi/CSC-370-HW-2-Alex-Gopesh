@@ -1,10 +1,10 @@
 """Symbolic regression for CSC 370 HW2. Alex Shields and Gopesh Baheti."""
 
 import argparse
+import csv
 from dataclasses import dataclass
 import dataclasses
 import hashlib
-import json
 from pathlib import Path
 import platform
 import random
@@ -377,7 +377,7 @@ def main():
         cfg = dataclasses.replace(PRESETS[args.dataset], **overrides)
     except ValueError as exc:
         p.error(str(exc))
-    path = Path("results") / (result_name(cfg, args.seed, args.runs) + ".json")
+    path = Path("results") / result_name(cfg, args.seed, args.runs)
     if args.plot:
         plot(path)
         return
@@ -412,30 +412,72 @@ def main():
         "best_run": best_index,
         "runs": runs,
     }
-    # Validate before replacing an existing result file.
-    saved = json.dumps(result, indent=1, allow_nan=False)
-    path.parent.mkdir(exist_ok=True)
-    path.write_text(saved + "\n")
-    print(f"best: {runs[best_index]['expression']}\nwrote {path}", flush=True)
+    save_results(path, result)
+    print(f"best: {runs[best_index]['expression']}\nwrote CSVs in {path.parent}", flush=True)
     plot(path)
 
 
-def summarize(paths):
-    """Make the results table directly from saved experiments."""
+def read_csv(path):
+    with Path(path).open(newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def save_results(path, result):
+    cfg, runs = result["config"], result["runs"]
+    common = {"experiment": path.name, "dataset": cfg["dataset"],
+              "population": cfg["population"], "size_penalty": cfg["size_penalty"]}
+    settings = {"experiment": path.name, "source_json": ""}
+    settings.update({k: v for k, v in result.items() if k not in ("config", "runs")})
+    settings.update({f"config_{k}": ",".join(v) if isinstance(v, (tuple, list)) else v
+                     for k, v in cfg.items()})
+    run_rows, generation_rows = [], []
+    for i, run in enumerate(runs):
+        row = {**common, "run_index": i, "selected_best_run": i == result["best_run"]}
+        row.update({k: v for k, v in run.items() if k != "history"})
+        run_rows.append(row)
+        generation_rows.extend({**common, "run_index": i, "seed": run["seed"], **point}
+                               for point in run["history"])
+    best = runs[result["best_run"]]
+    summary = {**common, "run_count": len(runs), "generations": cfg["generations"],
+               "selected_run_index": result["best_run"], "selected_seed": best["seed"],
+               "selected_expression": best["expression"],
+               "selected_test_error": best["test_error"], "selected_test_rmse": best["test_rmse"],
+               "selected_tree_size": best["size"],
+               "median_test_error": float(np.median([r["test_error"] for r in runs])),
+               "median_tree_size": float(np.median([r["size"] for r in runs])),
+               "mean_initial_diversity": float(np.mean([r["history"][0]["unique"] for r in runs]) / cfg["population"]),
+               "mean_final_diversity": float(np.mean([r["history"][-1]["unique"] for r in runs]) / cfg["population"])}
+    tables = {"experiments.csv": [settings], "runs.csv": run_rows,
+              "generations.csv": generation_rows, "summary.csv": [summary]}
+    for rows in tables.values():
+        for row in rows:
+            if any(isinstance(v, float) and not np.isfinite(v) for v in row.values()):
+                raise ValueError("cannot save nonfinite experiment results")
+    path.parent.mkdir(exist_ok=True)
+    for name, rows in tables.items():
+        target = path.parent / name
+        existing = read_csv(target) if target.exists() else []
+        existing = [r for r in existing if r["experiment"] != path.name]
+        columns = list(dict.fromkeys(k for row in existing + rows for k in row))
+        temporary = target.with_suffix(".tmp")
+        with temporary.open("w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=columns, lineterminator="\n")
+            writer.writeheader()
+            writer.writerows(existing + rows)
+        temporary.replace(target)
+
+
+def summarize(directory="results"):
+    """Make the results table from summary.csv."""
     lines = [
         "| Dataset | Population | Penalty | Selected test error | Median test error | Median nodes | Mean diversity, initial → final |",
         "|---|---:|---:|---:|---:|---:|---:|",
     ]
-    for path in sorted(map(Path, paths)):
-        d = json.loads(path.read_text())
-        cfg, runs = d["config"], d["runs"]
-        best = runs[d["best_run"]]
-        initial = np.mean([r["history"][0]["unique"] for r in runs]) / cfg["population"]
-        final = np.mean([r["history"][-1]["unique"] for r in runs]) / cfg["population"]
+    for row in sorted(read_csv(Path(directory) / "summary.csv"), key=lambda r: r["experiment"]):
         lines.append(
-            f"| {Path(cfg['dataset']).stem} | {cfg['population']} | {cfg['size_penalty']:g} "
-            f"| {best['test_error']:.6g} | {np.median([r['test_error'] for r in runs]):.6g} "
-            f"| {np.median([r['size'] for r in runs]):g} | {initial:.1%} → {final:.1%} |"
+            f"| {Path(row['dataset']).stem} | {row['population']} | {float(row['size_penalty']):g} "
+            f"| {float(row['selected_test_error']):.6g} | {float(row['median_test_error']):.6g} "
+            f"| {float(row['median_tree_size']):g} | {float(row['mean_initial_diversity']):.1%} → {float(row['mean_final_diversity']):.1%} |"
         )
     return "\n".join(lines)
 
@@ -447,22 +489,27 @@ def plot(path):
     import matplotlib.pyplot as plt
 
     path = Path(path)
-    d = json.loads(path.read_text())
+    rows = [r for r in read_csv(path.parent / "generations.csv") if r["experiment"] == path.name]
+    if not rows:
+        raise ValueError(f"no saved generations for {path.name}")
+    run_ids = sorted({int(r["run_index"]) for r in rows})
     fig, axes = plt.subplots(1, 3, figsize=(14, 4))
     for key, label, ax in zip(
         ["best", "mean_size", "unique"],
         ["training error of generation winner", "mean tree size", "distinct expressions"], axes,
     ):
-        for r in d["runs"]:
-            ax.plot([h["gen"] for h in r["history"]], [h[key] for h in r["history"]], lw=1)
+        for run_id in run_ids:
+            points = sorted((r for r in rows if int(r["run_index"]) == run_id), key=lambda r: int(r["gen"]))
+            ax.plot([int(r["gen"]) for r in points], [float(r[key]) for r in points], lw=1)
         ax.set(xlabel="generation (0 is initial)", ylabel=label, title=label)
         ax.grid(alpha=0.3)
     axes[0].set_yscale("log")
-    fig.suptitle(f"{path.stem}: {len(d['runs'])} runs")
+    fig.suptitle(f"{path.name}: {len(run_ids)} runs")
     fig.tight_layout()
-    fig.savefig(path.with_suffix(".png"), dpi=130)
+    output = path.parent / (path.name + ".png")
+    fig.savefig(output, dpi=130)
     plt.close(fig)
-    print(f"wrote {path.with_suffix('.png')}", flush=True)
+    print(f"wrote {output}", flush=True)
 
 
 if __name__ == "__main__":

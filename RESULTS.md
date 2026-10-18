@@ -68,13 +68,13 @@ not an untouched final evaluation. These results use ten runs and one split.
 Tree sizes exclude the fitted outer constants. Algebraic simplifications can
 change protected division at zero.
 
-The six JSON files contain the measurements, histories, fitted constants,
-dataset hashes, and settings. Earlier local results in `results/legacy/` are
+The CSV files in `results/` contain the measurements, histories, fitted
+constants, dataset hashes, and settings. Earlier local results in `results/legacy/` are
 superseded. Rerun the commands in README to reproduce these experiments;
 `--plot` redraws the saved training error, tree size, and diversity plots.
 Versions can affect numerical details. Runs were timed concurrently, so the
 timings are not a controlled speed comparison.
 
 ```sh
-python -c 'from pathlib import Path; import symbolic_regression as sr; print(sr.summarize(Path("results").glob("*.json")))'
+python -c 'import symbolic_regression as sr; print(sr.summarize())'
 ```
