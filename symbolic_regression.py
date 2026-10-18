@@ -54,9 +54,12 @@ class EquationTree:
             return str(self.value)
         return f"({self.left} {self.value} {self.right})"
     
+    def __repr__(self) -> str:
+        return self.__str__()
+    
 
 def make_random_leaf(num_vars: int, real_constants: bool) -> EquationTree:
-    """Returns either a variable or a numerical constnt equal probability."""
+    """Returns either a variable or a numerical constnt with equal probability."""
     if random.random() < 0.5:
         return EquationTree(f"x{random.randint(1, num_vars)}")
     val = random.randint(-5, 5) if not real_constants else round(random.uniform(-5, 5), 2)
@@ -78,7 +81,7 @@ def make_random_tree(max_depth: int, num_vars: int, real_constants: bool, is_roo
 def initialize_population(
     population_size: int,
     num_vars: int,
-    min_depth: int = 2,
+    min_depth: int = 1,
     max_depth: int = 5,
     real_constants : bool = False
     ) -> list[EquationTree]:
@@ -97,3 +100,5 @@ def initialize_population(
         population.append(tree)
 
     return population
+
+print(initialize_population(3, 2))
