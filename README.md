@@ -12,7 +12,7 @@ source env/bin/activate
 python -m pip install numpy pandas matplotlib scikit-learn ipykernel
 ```
 
-Open `symreg.ipynb`, select the an environment interpreter, and run the cells in order.
+Open `symreg.ipynb`, select the env interpreter, and run the cells in order.
 The notebook contains the data split, experiment settings, scoring,
 CSV output, and graph code. It imports `run_gp` from `symbolic_regression.py`,
 which contains the expression trees, training fitness, and genetic operators.
