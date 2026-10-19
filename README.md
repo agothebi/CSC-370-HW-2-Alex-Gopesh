@@ -10,7 +10,7 @@ Dataset3 is optional and we did not use it.
 ```sh
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt
+python -m pip install numpy matplotlib
 python symbolic_regression.py dataset1.csv
 python symbolic_regression.py dataset2.csv
 ```
@@ -55,7 +55,7 @@ squared relative error, with denominator `max(abs(y), 0.005)`. The floor is
 half the last recorded decimal unit. All rows are kept, including zero targets
 and zero distances. Test predictions use the same fitted constants.
 
-See [RESULTS.md](RESULTS.md) for the saved experiment results.
+Saved experiment measurements are in `results/`.
 
 The expression trees and operators follow the assignment's
 [Koza tutorial](https://www.genetic-programming.com/gpquadraticexample.html).
