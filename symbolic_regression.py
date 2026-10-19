@@ -5,7 +5,6 @@ import random
 from typing import Any, Optional
 
 import numpy as np
-from sklearn.metrics import mean_squared_error
 
 EARLY_STOP_THRESHOLD = 1e-4
 
@@ -140,7 +139,7 @@ def get_fitness(expression: ExpressionTree, x: np.ndarray, y: np.ndarray) -> flo
     if not np.isfinite(y_pred).all():
         return float('inf')
 
-    mse = mean_squared_error(y, y_pred)
+    mse = np.mean((y_pred - y) ** 2)
     normalized_error = mse / (np.var(y) + 1e-9)
 
     return normalized_error
