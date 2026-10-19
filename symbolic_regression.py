@@ -132,12 +132,26 @@ def initialize_population(
     return population
 
 
-def get_fitness(expression: ExpressionTree, x: np.ndarray, y: np.ndarray) -> float:
-    """Returns normalized mean squared error between predicted and true values."""
+def linear_scale(y_pred: np.ndarray, y: np.ndarray) -> tuple[float, float]:
+    """Returns the least-squares a, b for y = a + b * y_pred (Keijzer 2003)."""
+    var = np.var(y_pred)
+    if not np.isfinite(var) or var == 0:
+        return float(np.mean(y)), 0.0
+    b = np.mean((y_pred - y_pred.mean()) * (y - y.mean())) / var
+    return float(y.mean() - b * y_pred.mean()), float(b)
+
+
+def get_fitness(expression: ExpressionTree, x: np.ndarray, y: np.ndarray, scale: bool = False) -> float:
+    """Returns normalized mean squared error between predicted and true values.
+    With scale, the predictions are first linearly scaled to fit y."""
     y_pred = expression.evaluate(x)
 
     if not np.isfinite(y_pred).all():
         return float('inf')
+
+    if scale:
+        a, b = linear_scale(y_pred, y)
+        y_pred = a + b * y_pred
 
     mse = np.mean((y_pred - y) ** 2)
     normalized_error = mse / (np.var(y) + 1e-9)
@@ -173,12 +187,12 @@ def select_parent(population: list[ExpressionTree], scores: list[float], k: int 
     return population[best_species]
 
 
-def run_gp(x_train: np.ndarray, y_train: np.ndarray, num_vars: int, real_constants: bool, population_size=1000, generations=40):
+def run_gp(x_train: np.ndarray, y_train: np.ndarray, num_vars: int, real_constants: bool, population_size=1000, generations=40, scale=False):
     population = initialize_population(population_size, num_vars)
     history = []
 
     for gen in range(generations):
-        scores = [get_fitness(species, x_train, y_train) for species in population]
+        scores = [get_fitness(species, x_train, y_train, scale) for species in population]
 
         # Sort the population by fitness
         ranked = [tree for _, tree in sorted(zip(scores, population), key=lambda x: x[0])]
