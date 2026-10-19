@@ -2,70 +2,35 @@
 
 Alex Shields and Gopesh Baheti
 
-Symbolic regression with expression trees for dataset1 and dataset2.
-Dataset3 is optional and we did not use it.
+Symbolic regression for dataset1 and dataset2. Dataset3 is not used.
 
 ## Running
 
 ```sh
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install numpy matplotlib
-python symbolic_regression.py dataset1.csv
-python symbolic_regression.py dataset2.csv
+python -m venv env
+source env/bin/activate
+python -m pip install numpy pandas matplotlib scikit-learn ipykernel
 ```
 
-The defaults are 10 runs, population 250, and 50 generations. Each run uses
-20,000 training rows and 5,000 test rows. The split seed is 370 and the run
-seeds are 370 through 379.
+Open `symreg.ipynb`, select the `env` interpreter, and run the cells in order.
+The notebook contains the data split, experiment settings, held-out scoring,
+CSV output, and graph code. It imports `run_gp` from `symbolic_regression.py`,
+which contains the expression trees, training fitness, and genetic operators.
 
-For the population and size penalty comparisons:
+The experiments use Gopesh's settings: population 1,000, at most 40 generations,
+tournament size 4, two elites, and 80% crossover / 20% mutation for the remaining
+children. Initial depths are 1 to 5 and maximum depth is 8. There is no fitted
+outer scale or size penalty. Training fitness below 0.0001 stops a run early.
+Initial constants are integers; dataset2 mutations can introduce constants
+rounded to two decimals, matching the original code.
 
-```sh
-python symbolic_regression.py dataset1.csv --pop 50
-python symbolic_regression.py dataset1.csv --penalty 0
-python symbolic_regression.py dataset2.csv --pop 50
-python symbolic_regression.py dataset2.csv --penalty 0
-```
+The notebook runs ten seeds, 212 through 221, for each of three conditions:
+dataset1, full dataset2, and dataset2 restricted to recorded distance at least 0.1.
+The split uses seed 42 and 5,000 held-out rows before the distance filter.
 
-Results go in four CSV files in `results/`:
+`results.csv` holds every run score, generation history, and held-out prediction.
+Each row has a `condition` and a `kind` (run, history, or prediction). The notebook
+loads this file instead of rerunning; uncomment the two lines in the experiment cell
+to regenerate it.
 
-- `experiments.csv`: settings and dataset metadata.
-- `runs.csv`: models, errors, constants, and timings for each run.
-- `generations.csv`: training error, tree size, and diversity by generation.
-- `summary.csv`: one row per experiment for comparing settings.
-
-Use `experiment` to join the tables, plus `run_index` for individual runs.
-Run and generation indices start at zero. The files include all six experiments
-(60 runs and 3,000 generation records). Running the same settings replaces
-that experiment's rows and keeps the others. PNG plots are saved locally.
-Use `--plot` to plot the saved CSV data:
-
-```sh
-python symbolic_regression.py dataset1.csv --plot
-```
-
-## Code
-
-Everything is in `symbolic_regression.py`: the expression tree, data loading,
-fitness, genetic operators, and experiment runner. It combines Gopesh's
-left/right tree structure with the training-only scaling and experiment code.
-`symreg.ipynb` runs the same file for each dataset.
-
-Trees use +, -, *, protected division, variables, and integers from -5 to 5.
-Division returns 1 when the divisor is smaller than 1e-12 in absolute value.
-Initialization mixes full and grow trees at depths 2 to 6. Tournament size is 7.
-Each generation keeps 8% elites, makes 90% crossover children, and fills the
-remaining 2% with mutation. Children deeper than 8 are replaced by their parent.
-Fitness is `error * (1 + 0.01 * tree_size)` by default.
-
-Scale constants are fitted on the training rows. Dataset1 uses `a + b*tree`
-and MSE divided by training target variance. Dataset2 uses `b*tree` and mean
-squared relative error, with denominator `max(abs(y), 0.005)`. The floor is
-half the last recorded decimal unit. All rows are kept, including zero targets
-and zero distances. Test predictions use the same fitted constants.
-
-Saved experiment measurements are in `results/`.
-
-The expression trees and operators follow the assignment's
-[Koza tutorial](https://www.genetic-programming.com/gpquadraticexample.html).
+The setup follows [Koza's preparatory steps](https://www.genetic-programming.com/gppreparatory.html).
