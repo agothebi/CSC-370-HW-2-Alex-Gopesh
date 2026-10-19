@@ -7,9 +7,9 @@ Symbolic regression for dataset1 and dataset2. Dataset3 is not used.
 ## Running
 
 ```sh
-python -m venv env
+python3 -m venv env
 source env/bin/activate
-python -m pip install numpy pandas matplotlib scikit-learn ipykernel
+python3 -m pip install numpy pandas matplotlib scikit-learn ipykernel
 ```
 
 Open `symreg.ipynb`, select the env interpreter, and run the cells in order.
