@@ -2,7 +2,13 @@
 
 Alex Shields and Gopesh Baheti
 
-Symbolic regression for dataset1 and dataset2. Dataset3 is not used.
+Symbolic regression with genetic programming on dataset1 and dataset2. Dataset3 is not used.
+
+## Files
+
+- `symbolic_regression.py`: expression trees, fitness, crossover, mutation and the GP loop (`run_gp`)
+- `symreg.ipynb`: data split, experiments and plots
+- `results.csv`: saved results, so the notebook doesn't have to rerun the GP
 
 ## Running
 
@@ -12,22 +18,24 @@ source env/bin/activate
 python3 -m pip install numpy pandas matplotlib scikit-learn ipykernel
 ```
 
-Open `symreg.ipynb`, select the env interpreter, and run the cells in order.
-The notebook contains the data split, experiment settings, scoring,
-CSV output, and graph code. It imports `run_gp` from `symbolic_regression.py`,
-which contains the expression trees, training fitness, and genetic operators.
+Open `symreg.ipynb`, select the env interpreter, and run all cells. It loads `results.csv`.
+To rerun the experiments (about 10 minutes), uncomment the run lines in the cell that loads `results.csv`.
 
-The experiments use these settings: population 1,000, at most 40 generations,
-tournament size 4, two elites, and 80% crossover / 20% mutation for the remaining
-children. Initial depths are 1 to 5 and maximum depth is 8. There is no fitted
-outer scale or size penalty. Training fitness below 0.0001 stops a run early.
-Initial constants are integers.
+## Settings
 
-The notebook runs ten seeds, 212 through 221, for each of three conditions:
-dataset1, full dataset2, and dataset2 restricted to recorded distance at least 0.1.
-The split uses seed 42 and 5,000 held-out rows before the distance filter.
+- Population 1,000, up to 40 generations, 10 seeds (212 to 221)
+- Tournament size 4, 2 elites, 80% crossover and 20% mutation
+- Starting depth 1 to 5, max depth 8
+- Fitness: MSE / Var(y), plus 0.00001 per node. A run stops early when the error is below 0.0001
+- 5,000 rows held out for testing (split seed 42)
 
-`results.csv` holds every run score, generation history, and held-out prediction.
-Each row has a `condition` and a `kind` (run, history, or prediction). The notebook
-loads this file instead of rerunning; comment the two lines in the experiment cell
-to regenerate it.
+## Experiments
+
+- Dataset1
+- Dataset2, all rows
+- Dataset2, rows with x3 >= 0.1
+- Dataset2, rows with x3 >= 0.1, with linear scaling (each tree is scored as `a + b * tree`)
+
+## Note
+
+This README and some of the tests were done with the help of an LLM.
